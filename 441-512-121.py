@@ -15,7 +15,7 @@ from model import Linear_QNet, QTrainer
 
 MAX_MEMORY = 100_000
 BATCH_SIZE = 1000
-LR = 0.001
+LR = 0.0008
 
 
 class Agent:
@@ -25,7 +25,7 @@ class Agent:
         self.epsilon = 0
         self.gamma = 0.9
         self.memory = deque(maxlen=MAX_MEMORY)
-        self.model = Linear_QNet(441, 1024, 121)
+        self.model = Linear_QNet(441, 512, 121)
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
         self.track_score = 0
         self.record = -100
@@ -85,19 +85,19 @@ class TerranNoobgam(BotAI):
         self.fig, self.axs = plt.subplots(2)
         self.plot_scores = []
         self.plot_records = []
+        self.big_score = 0
 
     async def on_step(self, iteration):
         self.score = 0
+        # plt.imshow(self.current_state)
+        # plt.pause(0.001)
         if iteration != 0:
             if not self.units(UnitTypeId.HELLION).exists or not self.enemy_units(UnitTypeId.ZERGLING).exists:
                 self.done = True
-                enemy_left_hp = 0
-                for enemy_left in self.enemy_units(UnitTypeId.ZERGLING):
-                    enemy_left_hp += enemy_left.health_percentage
-                our_hp_left = 0
+                our_hp_left = 0 # 0
                 if self.units(UnitTypeId.HELLION).exists:
-                    our_hp_left = self.units(UnitTypeId.HELLION).first.health_percentage
-                self.reward = (4 - enemy_left_hp + our_hp_left*2)*2  # fin reward
+                    our_hp_left = self.units(UnitTypeId.HELLION).first.health_percentage*3 + 1 # 1-4
+                self.reward = 2 - len(self.enemy_units(UnitTypeId.ZERGLING)) + our_hp_left  # fin reward
                 self.score = self.reward
             # skip on first iteration of the round
             if not self.first_iter_of_round:
@@ -117,17 +117,12 @@ class TerranNoobgam(BotAI):
             if not self.done:
                 self.score = 0  # score
                 unit = self.units(UnitTypeId.HELLION).first
+
                 enemy_units = self.enemy_units(UnitTypeId.ZERGLING)
-                if_move = True
                 place = np.argwhere(self.action == 1)[0]
-                for enemy_unit in enemy_units:
-                    x = enemy_unit.position.x - unit.position.x
-                    y = enemy_unit.position.y - unit.position.y
-                    if abs(x - place[0] + 5) < 1 and abs(y - place[1] + 5):
-                        unit.attack(enemy_unit)
-                        if_move = False
-                        break
-                if if_move:
+                if place[0] == 5 and place[1] == 5:
+                    unit.attack(unit.position)
+                else:
                     move_to = Point2((place[0] + unit.position.x - 5, place[1] + unit.position.y - 5))
                     unit.move(move_to)
                 cd = 0
@@ -138,33 +133,52 @@ class TerranNoobgam(BotAI):
                 current_our_hp = unit.health_percentage  # 0-1
                 for enemy_unit in enemy_units:
                     current_enemy_hp += enemy_unit.health_percentage
-                    x = round(enemy_unit.position.x - unit.position.x)
-                    y = round(enemy_unit.position.y - unit.position.y)
+                    x = int(enemy_unit.position.x - unit.position.x)
+                    y = int(enemy_unit.position.y - unit.position.y)
                     if 10 >= x >= -10 and 10 >= y >= -10:
                         self.current_state[x+10][y+10] = 1
                 self.current_state[10, 10] = cd
-                self.reward = (current_our_hp - self.remember_our_hp)*2 + (current_enemy_hp - self.remember_enemy_hp)/4  # short term reward
+                for i in range(21):
+                    for j in range(21):
+                        coord1 = i - 10 + unit.position.x
+                        coord2 = j - 10 + unit.position.y
+                        if coord1 < 2 or coord1 > 46 or coord2 < 2 or coord2 > 38:
+                            self.current_state[i, j] = 2
+                        elif self.game_info.terrain_height.__getitem__((int(coord1), int(coord2))) > 210:
+                            # print(self.game_info.terrain_height.__getitem__((round(coord1), round(coord2))))
+                            self.current_state[i, j] = 2
+                summm = np.sum(self.current_state[3:8, 3:8])
+                if summm > 4:
+                    self.reward -= 0.5
+                self.reward += ((current_our_hp - self.remember_our_hp)/1.5 + (current_enemy_hp - self.remember_enemy_hp)/2)/5  # short term reward
+                # distnt = unit.distance_to(enemy_units.center)
+                # self.reward = 0
+                # if distnt < 5:
+                #     self.reward = distnt/5
 
             if self.done:  # reset game
                 self.agent.n_games += 1
-                self.agent.train_long_memory()
-                if self.score > self.record:
-                    self.record = self.score
-                    self.agent.model.save()
-                self.plot_scores.append(self.score)
-                self.plot_records.append(self.record)
-                print(self.score, self.record)
-                await self.chat_send('end')
-                self.done = False
-                self.first_iter_of_round = True
-                self.reward = 0
-                x_coord = np.linspace(0, self.agent.n_games, self.agent.n_games)
-                # print(x_coord)
+                self.big_score += self.score
+                if self.agent.n_games % 10 == 0:
+                    self.agent.train_long_memory()
+                    if self.big_score > self.record:
+                        self.record = self.big_score
+                        self.agent.model.save()
+                    self.plot_scores.append(self.big_score/10)
+                    self.plot_records.append(self.record/10)
+                    print(self.big_score, self.record)
+                    self.big_score = 0
+                x_coord = np.linspace(0, self.agent.n_games//10*10, self.agent.n_games//10)
                 self.axs[0].cla()
                 self.axs[1].cla()
                 self.axs[0].plot(x_coord, self.plot_scores)
                 self.axs[1].plot(x_coord, self.plot_records)
-                plt.pause(0.05)
+                plt.pause(0.001)
+                await self.chat_send('end')
+                self.done = False
+                self.first_iter_of_round = True
+                self.reward = 0
+                
 
 
         # state
