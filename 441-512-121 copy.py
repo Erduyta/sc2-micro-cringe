@@ -19,14 +19,18 @@ LR = 0.0008
 
 
 dict_fo_moves = {
-    0: (-1, -1),
-    1: (-1, 0),
-    2: (-1, 1),
-    3: (0, 1),
-    4: (1, 1),
-    5: (1, 0),
-    6: (1, -1),
-    7: (0, -1),
+    0: (-2, -1),
+    1: (-2, 0),
+    2: (-2, 1),
+    3: (-1, 2),
+    4: (0, 2),
+    5: (1, 2),
+    6: (-1, -2),
+    7: (0, -2),
+    8: (1, -2),
+    9: (2, -1),
+    10: (2, 0),
+    11: (2, 1),
 }
 
 
@@ -37,7 +41,7 @@ class Agent:
         self.epsilon = 0
         self.gamma = 0.9
         self.memory = deque(maxlen=MAX_MEMORY)
-        self.model = Linear_QNet(169, 512, 9)
+        self.model = Linear_QNet(169, 512, 13)
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
         self.track_score = 0
         self.record = -100
@@ -64,16 +68,16 @@ class Agent:
 
     def get_action(self, state):
         # random moves: exploration/expoitation
-        self.epsilon = 80 - self.n_games
+        self.epsilon = 201 - self.n_games
         final_move = np.zeros([13])
-        if random.randint(0, 200) < self.epsilon:# TODO
-            move1 = random.randint(0, 8)
+        if random.randint(0, 200) < self.epsilon:
+            move1 = random.randint(0, 12)
             final_move[move1] = 1
         else:
             state0 = torch.tensor(state, dtype=torch.float)
             prediction = self.model(state0)
             move_torch = torch.argmax(prediction).item()
-            final_move[move_torch] = 1# TODO
+            final_move[move_torch] = 1
         return final_move
 
 
@@ -81,17 +85,17 @@ class TerranNoobgam(BotAI):
     def __init__(self) -> None:
         super().__init__()
         self.current_state = np.zeros([13, 13])  # actual state
-        self.action = np.zeros([9])
-        self.action[6] = 1
+        self.action = np.zeros([13])
+        # self.action[6] = 1
         self.reward = 0
         self.remember_our_hp = 1
-        self.remember_enemy_hp = 4
+        self.remember_enemy_hp = 2
         self.done = False
         self.agent = Agent()
         self.state_old = None  # remeber between cycles
         self.state_new = None  # remeber between cycles
         self.score = 0
-        self.record = -1
+        self.record = -1000
         self.first_iter_of_round = True
         self.fig, self.axs = plt.subplots(2)
         self.plot_scores = []
@@ -99,17 +103,16 @@ class TerranNoobgam(BotAI):
         self.big_score = 0
 
     async def on_step(self, iteration):
-        self.score = 0
         # plt.imshow(self.current_state)
         # plt.pause(0.001)
         if iteration != 0:
             if not self.units(UnitTypeId.HELLION).exists or not self.enemy_units(UnitTypeId.ZERGLING).exists:
                 self.done = True
-                our_hp_left = 0 # 0
+                our_hp_left = -10 # 0
                 if self.units(UnitTypeId.HELLION).exists:
-                    our_hp_left = self.units(UnitTypeId.HELLION).first.health_percentage*3 # 4-7
-                self.reward =  our_hp_left  # fin reward
-                self.score = self.reward
+                    our_hp_left = self.units(UnitTypeId.HELLION).first.health_percentage*10 # 4-7
+                self.reward = our_hp_left  # fin reward
+                self.score += self.reward
             # skip on first iteration of the round
             if not self.first_iter_of_round:
                 self.state_new = self.agent.get_state(self.current_state)  # new state
@@ -125,21 +128,18 @@ class TerranNoobgam(BotAI):
                 # -> action
                 # action -> sc2
                 # action
-            if not self.done:
                 self.score = 0  # score
                 unit = self.units(UnitTypeId.HELLION).first
 
                 enemy_units = self.enemy_units(UnitTypeId.ZERGLING)
                 place = np.argwhere(self.action == 1)[0]
-                if place[0] == 8:
-                    unit.attack(unit.position)
+                if place[0] == 12:
+                    unit.move(unit.position)  # TODO aa -> move
                 else:
                     coords_delta = dict_fo_moves[place[0]]
                     move_to = Point2((coords_delta[0] + unit.position.x, coords_delta[1] + unit.position.y))
                     unit.move(move_to)
-                cd = 0
-                if unit.weapon_cooldown > 0:
-                    cd = 1
+                cd = unit.weapon_cooldown
                 self.current_state = np.zeros([13, 13])
                 current_enemy_hp = 0
                 current_our_hp = unit.health_percentage  # 0-1
@@ -163,7 +163,10 @@ class TerranNoobgam(BotAI):
                 self.reward = 0
                 if summm > 3:
                     self.reward -= 1
-                self.reward = (current_our_hp - self.remember_our_hp)*2+0.1  # short term reward
+                self.reward = (current_our_hp - self.remember_our_hp)*2 -1 + (self.remember_enemy_hp - current_enemy_hp)  # short term reward
+                self.score += self.reward
+                self.remember_enemy_hp = current_enemy_hp
+                self.remember_our_hp = current_our_hp
                 # distnt = unit.distance_to(enemy_units.center)
                 # self.reward = 0
                 # if distnt < 5:
@@ -171,6 +174,7 @@ class TerranNoobgam(BotAI):
 
             if self.done:  # reset game
                 self.agent.n_games += 1
+                # print(iteration)
                 self.big_score += self.score
                 if self.agent.n_games % 10 == 0:
                     self.agent.train_long_memory()
@@ -179,8 +183,9 @@ class TerranNoobgam(BotAI):
                         self.agent.model.save()
                     self.plot_scores.append(self.big_score/10)
                     self.plot_records.append(self.record/10)
-                    print(self.big_score/10, self.record)
+                    print(self.big_score/10, self.record/10)
                     self.big_score = 0
+                self.score = 0
                 x_coord = np.linspace(0, self.agent.n_games//10*10-10, self.agent.n_games//10)
                 self.axs[0].cla()
                 self.axs[1].cla()
@@ -191,6 +196,7 @@ class TerranNoobgam(BotAI):
                 self.done = False
                 self.first_iter_of_round = True
                 self.reward = 0
+
                 
 
 
