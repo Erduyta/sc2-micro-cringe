@@ -26,7 +26,7 @@ class Agent:
         self.epsilon = 0
         self.gamma = 0.9
         self.memory = deque(maxlen=MAX_MEMORY)
-        self.model = Linear_QNet(441, 512, 121)
+        self.model = Linear_QNet(169, 512, 13)
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
         self.track_score = 0
         self.record = -100
