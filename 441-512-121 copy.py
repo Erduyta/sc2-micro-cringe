@@ -135,19 +135,21 @@ class RememberedState:
         # when defined means the round is over
         self.done_reward: Optional[float] = done_reward
 
-    def short_term_reward(self, other: RememberedState):
+    def short_term_reward(self, start_tick: int, other: RememberedState):
         reward = 0
         if self.done_reward:
             return self.done_reward
 
         # punish bot for staying close to walls
-        summ = np.sum(self.raw_state[5:8, 5:8])
+        summ = np.sum(self.raw_state[5:8, 5:8]) - self.raw_state[6, 6]
         if summ > 3:
             reward -= 1
         # punish bot for losing health and encourage attacking enemies
-        reward += (self.agent_hp - other.agent_hp) * 2 - 1 + (
-                self.enemy_hp - other.enemy_hp
+        reward += (self.agent_hp - other.agent_hp) * 2 + (
+                other.enemy_hp - self.enemy_hp
         )
+
+        reward += (self.tick - other.tick) * (self.tick - start_tick) / 1000
 
         return reward
 
@@ -194,6 +196,7 @@ class TerranNoobgam(BotAI):
         self.plot_scores = []
         self.plot_records = []
         self.big_score = 0
+        self.start_tick = 0
 
         self.skip_iterations = 5
 
@@ -240,18 +243,20 @@ class TerranNoobgam(BotAI):
                 self
             )
             # skip on first iteration of the round
-            if self.state_old:
+            if not self.state_old:
+                self.start_tick = iteration
+            else:
                 self.agent.train_short_memory(self.state_old.state, self.action, self.reward, self.state_new.state, self.done)  # stm
                 self.agent.remember(self.state_old.state, self.action, self.reward, self.state_new.state, self.done)  # remember
+                self.reward = self.state_new.short_term_reward(self.start_tick, self.state_old)
+
             self.state_old = RememberedState.create_from_agent(
                 iteration,
                 self
             )
-
-            self.reward = self.state_new.short_term_reward(self.state_old)
+            self.score += self.reward
             logging.info(f"Reward: {self.reward}")
             logging.info(f"Score: {self.score}")
-            self.score += self.reward
 
             if not self.state_new.done_reward:
                 self.action = self.agent.get_action(self.state_old.state)
@@ -272,7 +277,7 @@ def main():
     run_game(
         maps.get("ai-bot-erduyta"),
         [Bot(Race.Terran, TerranNoobgam()), Computer(Race.Zerg, Difficulty.Medium)],
-        realtime=True,
+        realtime=False,
         save_replay_as="WorkerRush.SC2Replay",
     )
 
