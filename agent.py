@@ -54,6 +54,7 @@ class Agent:
         else:
             state0 = torch.tensor(state, dtype=torch.float)
             prediction = self.model(state0)
+            # input_state ==> [ Q(input_state, a1), Q(input_state, a2), ... ]
             move = torch.argmax(prediction).item()
             final_move[move//3, move%3] = 1
         return final_move
