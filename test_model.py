@@ -17,6 +17,8 @@ from sc2.ids.unit_typeid import UnitTypeId
 import numpy as np
 import os
 from model import Linear_QNet, QTrainer
+from .learning import RememberedState, Agent, get_state_from_botai
+
 
 logging.basicConfig()
 logging.root.setLevel(logging.INFO)
@@ -43,160 +45,15 @@ dict_fo_moves = {
 }
 
 
-class Agent:
+class Agent2(Agent):
 
     def __init__(self) -> None:
-        self.n_games = 0
-        self.epsilon = 0
-        self.gamma = 0.9
-        self.memory = deque(maxlen=MAX_MEMORY)
-        self.model = Linear_QNet(625, 1024, 13)
+        super().__init__()
         model_folder_path = './model'
         file_name = 'model_good.pth'
         file_name = os.path.join(model_folder_path, file_name)
         self.model.load_state_dict(torch.load(file_name))
         self.model.eval()
-        self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
-        self.track_score = 0
-        self.record = -100
-        # model, trainer
-
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-
-    def get_state(self, current_state):
-        return current_state.flatten()
-
-    def train_long_memory(self):
-        if len(self.memory) > BATCH_SIZE:
-            mini_sample = random.sample(self.memory, BATCH_SIZE)  # list tuples
-        else:
-            mini_sample = self.memory
-        states, actions, rewards, next_states, dones = zip(*mini_sample)
-        self.trainer.train_step(states, actions, rewards, next_states, dones)
-        # for state, action, action, reward, next_state, done in mini_sample:
-        #    self.trainer.train_step(state, action, reward, next_state, done)
-
-    def train_short_memory(
-            self,
-            state: numpy.ndarray,
-            action: numpy.ndarray,
-            reward: float,
-            next_state: numpy.ndarray,
-            done):
-        self.trainer.train_step(state, action, reward, next_state, done)
-
-    def get_action(self, state: numpy.ndarray):
-        # random moves: exploration/expoitation
-        self.epsilon = 201 - self.n_games
-        final_move = np.zeros([13])
-        if random.randint(0, 200) < self.epsilon:
-            move1 = random.randint(0, 12)
-            final_move[move1] = 1
-        else:
-            state0 = torch.tensor(state, dtype=torch.float)
-            prediction = self.model(state0)
-            move_torch = torch.argmax(prediction).item()
-            final_move[move_torch] = 1
-        return final_move
-
-
-def get_state_from_botai(botai: BotAI) -> numpy.ndarray:
-    # throws if hellion is not found
-    units = botai.units(UnitTypeId.HELLION)
-    current_state = np.zeros([25, 25])
-    if not units:
-        return current_state
-    unit = units.first
-    enemy_units = botai.enemy_units(UnitTypeId.ZERGLING)
-    for enemy_unit in enemy_units:
-        x = round((enemy_unit.position.x - unit.position.x)*2)
-        y = round((enemy_unit.position.y - unit.position.y)*2)
-        if 12 >= x >= -12 and 12 >= y >= -12:
-            current_state[x + 12][y + 12] = 1
-    cd = unit.weapon_cooldown/10
-    current_state[12, 12] = cd
-    for i in range(25):
-        for j in range(25):
-            coord1 = (i - 12)/2 + unit.position.x
-            coord2 = (j - 12)/2 + unit.position.y
-            if coord1 < 2 or coord1 > 45 or coord2 < 2 or coord2 > 37:
-                current_state[i, j] = -1
-            elif botai.game_info.terrain_height[(round(coord1), round(coord2))] > 210:
-                # print(self.game_info.terrain_height.__getitem__((round(coord1), round(coord2))))
-                current_state[i, j] = -1
-    # plt.imshow(current_state, vmin=-1, vmax=4)
-    # plt.pause(0.001)
-    return current_state
-
-
-class RememberedState:
-    def __init__(self, raw_state, state, agent_hp, enemy_hp, tick, done_reward):
-        # input state
-        self.raw_state: numpy.ndarray = raw_state
-        self.state: numpy.ndarray = state
-
-        self.agent_hp: int = agent_hp
-        self.enemy_hp: int = enemy_hp
-
-        self.tick: int = tick
-
-        # when defined means the round is over
-        self.done_reward: Optional[float] = done_reward
-
-    def short_term_reward(self, botai: TerranNoobgam):
-        # self.start_tick, self.state_old, self.action
-        reward = 0
-        if self.done_reward:
-            return self.done_reward
-        # punish bot for moving into a wall
-        unit = botai.units(UnitTypeId.HELLION)
-        if unit.exists:
-            unit = unit.first
-            place = np.argwhere(botai.action == 1)[0]
-            if place != 12:
-                coords_delta = dict_fo_moves[place[0]]
-                move_to = (int(coords_delta[0] + unit.position.x), int(coords_delta[1] + unit.position.y))
-                if botai.game_info.terrain_height[move_to] > 210:
-                    reward -= 10
-            elif botai.state_old.raw_state[12, 12] > 0:
-                reward -= 10
-        # punish bot for losing health and encourage attacking enemies
-
-        reward += (self.agent_hp - botai.state_old.agent_hp) * 5
-        if botai.state_old.enemy_hp - self.enemy_hp:
-            reward += (botai.state_old.enemy_hp - self.enemy_hp)*2
-        reward += (botai.state_old.enemy_hp - self.enemy_hp)
-
-        # reward += (self.tick - other.tick) * (self.tick - start_tick) / 1000
-
-        return reward
-
-    @staticmethod
-    def create_from_agent(tick, botai: BotAI):
-        state = get_state_from_botai(botai)
-        units = botai.units(UnitTypeId.HELLION)
-        if units:
-            unit = botai.units(UnitTypeId.HELLION).first
-            our_hp = unit.health_percentage
-        else:
-            our_hp = 0
-        enemy_units = botai.enemy_units(UnitTypeId.ZERGLING)
-        done_reward: Optional[float] = None
-        if not units or not enemy_units.exists:
-            our_hp_left = 0  # 0
-            if units:
-                our_hp_left = our_hp * 10  # 4-7
-            done_reward = our_hp_left + 20 - 10*len(enemy_units)
-
-        return RememberedState(
-            raw_state=state,
-            state=state.flatten(),
-            agent_hp=our_hp,
-            enemy_hp=sum(map(lambda e: e.health_percentage, enemy_units)),
-            tick=tick,
-            done_reward=done_reward,
-        )
 
 
 class TerranNoobgam(BotAI):
